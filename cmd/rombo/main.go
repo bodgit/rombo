@@ -1,13 +1,40 @@
 package main
 
 import (
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/bodgit/rombo"
 	"github.com/urfave/cli"
 )
+
+type EnumValue struct {
+	Enum     []string
+	Default  string
+	selected string
+}
+
+func (e *EnumValue) Set(value string) error {
+	for _, enum := range e.Enum {
+		if enum == value {
+			e.selected = value
+			return nil
+		}
+	}
+
+	return fmt.Errorf("allowed values are %s", strings.Join(e.Enum, ", "))
+}
+
+func (e *EnumValue) String() string {
+	if e.selected == "" {
+		return e.Default
+	}
+	return e.selected
+}
 
 func init() {
 	cli.VersionFlag = cli.BoolFlag{
@@ -25,7 +52,7 @@ func merge(c *cli.Context) error {
 		cli.ShowCommandHelpAndExit(c, c.Command.FullName(), 1)
 	}
 
-	b, err := ioutil.ReadFile(c.Args().Get(0))
+	b, err := ioutil.ReadFile(c.Args().First())
 	if err != nil {
 		return cli.NewExitError(err, 1)
 	}
@@ -35,7 +62,7 @@ func merge(c *cli.Context) error {
 		return cli.NewExitError(err, 1)
 	}
 
-	for _, file := range c.Args()[1:] {
+	for _, file := range c.Args().Tail() {
 		b, err := ioutil.ReadFile(file)
 		if err != nil {
 			cli.NewExitError(err, 1)
@@ -69,7 +96,7 @@ func verify(c *cli.Context) error {
 		return cli.NewExitError(err, 1)
 	}
 
-	if err := rombo.Pipeline(datafile, c.Args()[0:], false, rombo.JaguarSD{}); err != nil {
+	if err := rombo.Pipeline(datafile, c.Args(), nil, nil); err != nil {
 		return cli.NewExitError(err, 1)
 	}
 
@@ -99,16 +126,37 @@ func main() {
 	app.Usage = "ROM management utility"
 	app.Version = "1.0.0"
 
+	stringToLayout := map[string]rombo.Layout{
+		"simple":  rombo.SimpleCompressed{},
+		"jaguar":  rombo.JaguarSD{},
+		"megasd":  rombo.MegaSD{},
+		"sd2snes": rombo.SD2SNES{},
+	}
+
+	layouts := make([]string, 0, len(stringToLayout))
+	for k := range stringToLayout {
+		layouts = append(layouts, k)
+	}
+	sort.Sort(sort.StringSlice(layouts))
+
 	app.Commands = []cli.Command{
 		{
-			Name:        "clean",
+			Name:        "export",
 			Usage:       "",
 			Description: "",
-			ArgsUsage:   "DIRECTORY...",
+			ArgsUsage:   "TARGET SOURCE...",
 			Flags: []cli.Flag{
 				cli.BoolFlag{
 					Name:  "dry-run, n",
 					Usage: "don't actually do anything",
+				},
+				cli.GenericFlag{
+					Name: "layout",
+					Value: &EnumValue{
+						Enum:    layouts,
+						Default: "simple",
+					},
+					Usage: strings.Join(layouts, ", "),
 				},
 				cli.BoolFlag{
 					Name:  "verbose, v",
@@ -116,14 +164,6 @@ func main() {
 				},
 			},
 			Action: export,
-		},
-		{
-			Name:        "export",
-			Usage:       "",
-			Description: "",
-			ArgsUsage:   "DIRECTORY...",
-			Flags:       []cli.Flag{},
-			Action:      export,
 		},
 		{
 			Name:        "merge",

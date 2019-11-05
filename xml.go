@@ -2,6 +2,7 @@ package rombo
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -12,6 +13,11 @@ import (
 
 	"github.com/jbowtie/gokogiri/xml"
 )
+
+type ROM struct {
+	Game     string
+	Filename string
+}
 
 type Datafile struct {
 	input  *xml.XmlDocument
@@ -90,20 +96,24 @@ Game:
 	return nil
 }
 
-func (d *Datafile) findROMByCRC(size uint64, crc string) (bool, error) {
+func (d *Datafile) findROMByCRC(size uint64, crc string) ([]ROM, bool, error) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
 	nodes, err := d.input.Search("/datafile/game/rom[@size='" + strconv.FormatUint(size, 10) + "' and (@crc='" + strings.ToLower(crc) + "' or @crc='" + strings.ToUpper(crc) + "')]")
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 
 	if len(nodes) > 0 {
-		return true, nil
+		roms := make([]ROM, 0, len(nodes))
+		for _, node := range nodes {
+			roms = append(roms, ROM{Game: node.Parent().Attr("name"), Filename: node.Attr("name")})
+		}
+		return roms, true, nil
 	}
 
-	return false, nil
+	return nil, false, nil
 }
 
 func (d *Datafile) deleteROMByCRC(size uint64, crc string) error {
@@ -132,20 +142,54 @@ func (d *Datafile) deleteROMByCRC(size uint64, crc string) error {
 	return nil
 }
 
-func (d *Datafile) findROMBySHA1(size uint64, sha string) (bool, error) {
+func (d *Datafile) findROMBySHA1(size uint64, sha string) ([]ROM, bool, error) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
 	nodes, err := d.input.Search("/datafile/game/rom[@size='" + strconv.FormatUint(size, 10) + "' and (@sha1='" + strings.ToLower(sha) + "' or @sha1='" + strings.ToUpper(sha) + "')]")
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 
 	if len(nodes) > 0 {
-		return true, nil
+		roms := make([]ROM, 0, len(nodes))
+		for _, node := range nodes {
+			roms = append(roms, ROM{Game: node.Parent().Attr("name"), Filename: node.Attr("name")})
+		}
+		return roms, true, nil
 	}
 
-	return false, nil
+	return nil, false, nil
+}
+
+func (d *Datafile) deleteROM(rom ROM) error {
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	nodes, err := d.output.Search("/datafile/game[@name=\"" + rom.Game + "\"]/rom[@name=\"" + rom.Filename + "\"]")
+	if err != nil {
+		return err
+	}
+
+	if len(nodes) > 1 {
+		return errors.New("more than one matched ROM")
+	}
+
+	for _, rom := range nodes {
+		game := rom.Parent()
+		rom.Unlink()
+
+		roms, err := game.Search("rom")
+		if err != nil {
+			return err
+		}
+
+		if len(roms) == 0 {
+			game.Unlink()
+		}
+	}
+
+	return nil
 }
 
 func (d *Datafile) deleteROMBySHA1(size uint64, sha string) error {

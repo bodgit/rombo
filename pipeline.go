@@ -3,11 +3,9 @@ package rombo
 import (
 	"archive/zip"
 	"context"
-	"crypto/sha1"
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
@@ -26,28 +24,19 @@ func findFiles(ctx context.Context, dir string, layout Layout) (<-chan string, <
 				return err
 			}
 
-			// Ignore any hidden files or directories, otherwise we end up fighting with things like Spotlight, etc.
-			if info.Name()[0] == '.' {
-				if info.IsDir() {
-					return filepath.SkipDir
-				} else {
-					return nil
-				}
-			}
-
 			// Work out the path relative to the base directory
 			relpath, err := filepath.Rel(dir, file)
 			if err != nil {
 				return err
 			}
 
-			// Ignore any layout-specific files or directories
-			if layout != nil && layout.ignorePath(relpath) {
+			// Ignore any hidden files or directories, otherwise we end up fighting with things like Spotlight, etc.
+			// Also ignore any layout-specific files or directories
+			if info.Name()[0] == '.' || (layout != nil && layout.ignorePath(relpath)) {
 				if info.Mode().IsDir() {
 					return filepath.SkipDir
-				} else {
-					return nil
 				}
+				return nil
 			}
 
 			// Ignore anything that isn't a normal file
@@ -125,39 +114,86 @@ func mimeSplitter(ctx context.Context, in <-chan string) (<-chan string, <-chan 
 	return out, zip, errc, nil
 }
 
-func processFile(ctx context.Context, d *Datafile, clean bool, in <-chan string) (<-chan error, error) {
+func processFile(ctx context.Context, d *Datafile, target *string, layout Layout, in <-chan string) (<-chan error, error) {
 	errc := make(chan error, 1)
 	go func() {
 		defer close(errc)
 		for file := range in {
-			data, err := ioutil.ReadFile(file)
-			if err != nil {
-				errc <- err
-				return
-			}
-			sha := fmt.Sprintf("%x", sha1.Sum(data))
-			fmt.Println("file:", sha, file)
-
-			ok, err := d.findROMBySHA1(uint64(len(data)), sha)
+			sha, length, err := sha1Sum(file)
 			if err != nil {
 				errc <- err
 				return
 			}
 
-			if ok {
-				if err := d.deleteROMBySHA1(uint64(len(data)), sha); err != nil {
+			roms, ok, err := d.findROMBySHA1(length, sha)
+			if err != nil {
+				errc <- err
+				return
+			}
+
+			if !ok {
+				// Delete if within target directory
+				if target != nil {
+					if _, err := filepath.Rel(*target, file); err != nil {
+						continue
+					}
+					fmt.Println("would delete invalid file", file)
+				}
+				continue
+			}
+
+			matched := false
+
+			for _, rom := range roms {
+				if target != nil {
+					relpath, _, _, err := layout.exportPath(rom.Game, rom.Filename)
+					if err != nil {
+						errc <- err
+						return
+					}
+
+					fullpath := filepath.Join(*target, relpath)
+
+					if fullpath == file {
+						// File is in the correct location, do nothing but mark it as seen
+						matched = true
+					} else {
+						_, err := os.Stat(fullpath)
+						if err != nil {
+							// Copy file
+							fmt.Println("would copy", file, "to", fullpath, "as it doesn't exist")
+						} else {
+							rsha, rlength, err := sha1Sum(fullpath)
+							if err != nil {
+								errc <- err
+								return
+							}
+
+							if rsha != sha || rlength != length {
+								// Copy the file
+								fmt.Println("would overwrite", fullpath, "with", file, "as it doesn't match")
+							}
+						}
+					}
+				}
+
+				// Mark the ROM as seen
+				if err := d.deleteROM(rom); err != nil {
 					errc <- err
 					return
 				}
-			} else if clean {
-				fmt.Println("deleting", file)
+			}
+
+			if target != nil && !matched {
+				// File was valid but is not in the right place
+				fmt.Println("would delete valid file", file)
 			}
 		}
 	}()
 	return errc, nil
 }
 
-func processZip(ctx context.Context, d *Datafile, clean bool, in <-chan string) (<-chan error, error) {
+func processZip(ctx context.Context, d *Datafile, target *string, layout Layout, in <-chan string) (<-chan error, error) {
 	errc := make(chan error, 1)
 	go func() {
 		defer close(errc)
@@ -172,19 +208,21 @@ func processZip(ctx context.Context, d *Datafile, clean bool, in <-chan string) 
 				crc := fmt.Sprintf("%.*x", crc32.Size<<1, f.CRC32)
 				fmt.Println("zip:", crc, file, f.Name)
 
-				ok, err := d.findROMByCRC(f.UncompressedSize64, crc)
+				roms, ok, err := d.findROMByCRC(f.UncompressedSize64, crc)
 				if err != nil {
 					errc <- err
 					return
 				}
 
-				if ok {
-					if err := d.deleteROMByCRC(f.UncompressedSize64, crc); err != nil {
+				if !ok {
+					continue
+				}
+
+				for _, rom := range roms {
+					if err := d.deleteROM(rom); err != nil {
 						errc <- err
 						return
 					}
-				} else if clean {
-					fmt.Println("deleting", f.Name, "from", file)
 				}
 			}
 
@@ -223,7 +261,7 @@ func mergeErrors(cs ...<-chan error) <-chan error {
 	return out
 }
 
-func Pipeline(datafile *Datafile, dirs []string, clean bool, layout Layout) error {
+func Pipeline(datafile *Datafile, dirs []string, target *string, layout Layout) error {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	defer cancelFunc()
 
@@ -232,6 +270,15 @@ func Pipeline(datafile *Datafile, dirs []string, clean bool, layout Layout) erro
 
 	for _, dir := range dirs {
 		filec, errc, err := findFiles(ctx, dir, layout)
+		if err != nil {
+			return err
+		}
+		filecList = append(filecList, filec)
+		errcList = append(errcList, errc)
+	}
+
+	if target != nil {
+		filec, errc, err := findFiles(ctx, *target, layout)
 		if err != nil {
 			return err
 		}
@@ -252,13 +299,13 @@ func Pipeline(datafile *Datafile, dirs []string, clean bool, layout Layout) erro
 	errcList = append(errcList, errc)
 
 	for i := 0; i < 10; i++ {
-		errc, err = processFile(ctx, datafile, clean, filec)
+		errc, err = processFile(ctx, datafile, target, layout, filec)
 		if err != nil {
 			return err
 		}
 		errcList = append(errcList, errc)
 
-		errc, err = processZip(ctx, datafile, clean, zipc)
+		errc, err = processZip(ctx, datafile, target, layout, zipc)
 		if err != nil {
 			return err
 		}

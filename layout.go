@@ -8,7 +8,7 @@ import (
 )
 
 type Layout interface {
-	exportPath(string, string, string) (string, bool, string, error)
+	exportPath(string, string) (string, bool, string, error)
 	ignorePath(string) bool
 }
 
@@ -29,7 +29,7 @@ func firstAlphanumeric(s string) (string, error) {
 
 type SimpleCompressed struct{}
 
-func (SimpleCompressed) exportPath(name, description, filename string) (string, bool, string, error) {
+func (SimpleCompressed) exportPath(name, filename string) (string, bool, string, error) {
 	// Create a zip using the name of the game containing the filename
 	return name + ".zip", true, filename, nil
 }
@@ -41,7 +41,7 @@ func (SimpleCompressed) ignorePath(relpath string) bool {
 
 type MegaSD struct{}
 
-func (MegaSD) exportPath(name, description, filename string) (string, bool, string, error) {
+func (MegaSD) exportPath(name, filename string) (string, bool, string, error) {
 	parent, err := firstAlphanumeric(name)
 	if err != nil {
 		return "", false, "", err
@@ -76,7 +76,7 @@ func (MegaSD) ignorePath(relpath string) bool {
 
 type JaguarSD struct{}
 
-func (JaguarSD) exportPath(name, description, filename string) (string, bool, string, error) {
+func (JaguarSD) exportPath(name, filename string) (string, bool, string, error) {
 	return filename, false, "", nil
 }
 
@@ -96,7 +96,7 @@ func (JaguarSD) ignorePath(relpath string) bool {
 
 type SD2SNES struct{}
 
-func (SD2SNES) exportPath(name, description, filename string) (string, bool, string, error) {
+func (SD2SNES) exportPath(name, filename string) (string, bool, string, error) {
 	return filename, false, "", nil
 }
 

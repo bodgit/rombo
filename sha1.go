@@ -3,16 +3,22 @@ package rombo
 import (
 	"crypto/sha1"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"os"
 )
 
 func sha1Sum(file string) (string, uint64, error) {
-	data, err := ioutil.ReadFile(file)
+	f, err := os.Open(file)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+
+	h := sha1.New()
+	length, err := io.Copy(h, f)
 	if err != nil {
 		return "", 0, err
 	}
 
-	sha := fmt.Sprintf("%x", sha1.Sum(data))
-
-	return sha, uint64(len(data)), nil
+	return fmt.Sprintf("%x", h.Sum(nil)), uint64(length), nil
 }

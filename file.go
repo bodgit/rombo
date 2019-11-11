@@ -16,16 +16,8 @@ func copyFile(src, dst string) error {
 	return writeFile(in, dst)
 }
 
-func moveFile(src, dst string) error {
-	return os.Rename(src, dst)
-}
-
-func deleteFile(file string) error {
-	return os.Remove(file)
-}
-
 func writeFile(in io.Reader, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0777); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), os.FileMode(0777)); err != nil {
 		return err
 	}
 

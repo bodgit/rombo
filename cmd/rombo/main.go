@@ -7,10 +7,18 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bodgit/rombo"
 	"github.com/urfave/cli"
 )
+
+var stringToLayout = map[string]rombo.Layout{
+	"simple":  rombo.SimpleCompressed{},
+	"jaguar":  rombo.JaguarSD{},
+	"megasd":  rombo.MegaSD{},
+	"sd2snes": rombo.SD2SNES{},
+}
 
 type EnumValue struct {
 	Enum     []string
@@ -44,6 +52,70 @@ func init() {
 }
 
 func export(c *cli.Context) error {
+	if c.NArg() < 2 {
+		cli.ShowCommandHelpAndExit(c, c.Command.FullName(), 1)
+	}
+
+	logger := log.New(ioutil.Discard, "", 0)
+	if c.Bool("verbose") {
+		logger.SetOutput(os.Stderr)
+	}
+
+	b, err := ioutil.ReadAll(os.Stdin)
+	if err != nil {
+		return cli.NewExitError(err, 1)
+	}
+
+	datafile, err := rombo.NewDatafile(b)
+	if err != nil {
+		return cli.NewExitError(err, 1)
+	}
+
+	layout := stringToLayout[c.Generic("layout").(*EnumValue).String()]
+
+	r, err := rombo.New(datafile, logger, !c.Bool("dry-run"), layout)
+	if err != nil {
+		return cli.NewExitError(err, 1)
+	}
+
+	start := time.Now()
+
+	files, bytes, err := r.Export(c.Args().First(), c.Args().Tail())
+	if err != nil {
+		return cli.NewExitError(err, 1)
+	}
+
+	elapsed := time.Since(start)
+
+	logger.Println("files:", files, "bytes:", bytes, "time:", elapsed)
+
+	start = time.Now()
+
+	files, bytes, err = r.Clean(c.Args().First())
+	if err != nil {
+		return cli.NewExitError(err, 1)
+	}
+
+	elapsed = time.Since(start)
+
+	logger.Println("files:", files, "bytes:", bytes, "time:", elapsed)
+
+	games, err := datafile.GamesRemaining()
+	if err != nil {
+		return cli.NewExitError(err, 1)
+	}
+
+	if games > 0 {
+		output := datafile.Marshal()
+
+		_, err = os.Stdout.Write(output)
+		if err != nil {
+			return cli.NewExitError(err, 1)
+		}
+
+		cli.NewExitError("", 2)
+	}
+
 	return nil
 }
 
@@ -86,6 +158,11 @@ func verify(c *cli.Context) error {
 		cli.ShowCommandHelpAndExit(c, c.Command.FullName(), 1)
 	}
 
+	logger := log.New(ioutil.Discard, "", 0)
+	if c.Bool("verbose") {
+		logger.SetOutput(os.Stderr)
+	}
+
 	b, err := ioutil.ReadAll(os.Stdin)
 	if err != nil {
 		return cli.NewExitError(err, 1)
@@ -96,11 +173,16 @@ func verify(c *cli.Context) error {
 		return cli.NewExitError(err, 1)
 	}
 
-	if err := rombo.Pipeline(datafile, c.Args(), nil, nil); err != nil {
+	r, err := rombo.New(datafile, logger, false, nil)
+	if err != nil {
 		return cli.NewExitError(err, 1)
 	}
 
-	games, err := datafile.Games()
+	if err := r.Verify(c.Args()); err != nil {
+		return cli.NewExitError(err, 1)
+	}
+
+	games, err := datafile.GamesRemaining()
 	if err != nil {
 		return cli.NewExitError(err, 1)
 	}
@@ -125,13 +207,6 @@ func main() {
 	app.Name = "rombo"
 	app.Usage = "ROM management utility"
 	app.Version = "1.0.0"
-
-	stringToLayout := map[string]rombo.Layout{
-		"simple":  rombo.SimpleCompressed{},
-		"jaguar":  rombo.JaguarSD{},
-		"megasd":  rombo.MegaSD{},
-		"sd2snes": rombo.SD2SNES{},
-	}
 
 	layouts := make([]string, 0, len(stringToLayout))
 	for k := range stringToLayout {

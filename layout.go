@@ -7,20 +7,25 @@ import (
 	"strings"
 )
 
+const (
+	noIntroBIOS = "[BIOS] " // No-Intro dat file prefix for BIOS images
+)
+
 type Layout interface {
-	exportPath(string, string) (string, bool, string, error)
+	exportPath(ROM) (string, bool, string, error)
 	ignorePath(string) bool
 }
 
 func firstAlphanumeric(s string) (string, error) {
+	s = strings.TrimPrefix(s, noIntroBIOS)
 	for _, c := range s {
 		switch {
 		case 'A' <= c && c <= 'Z':
 			fallthrough
 		case 'a' <= c && c <= 'z':
-			fallthrough
-		case '0' <= c && c <= '9':
 			return strings.ToUpper(string(c)), nil
+		case '0' <= c && c <= '9':
+			return "#", nil
 		}
 	}
 
@@ -29,9 +34,9 @@ func firstAlphanumeric(s string) (string, error) {
 
 type SimpleCompressed struct{}
 
-func (SimpleCompressed) exportPath(name, filename string) (string, bool, string, error) {
+func (SimpleCompressed) exportPath(rom ROM) (string, bool, string, error) {
 	// Create a zip using the name of the game containing the filename
-	return name + ".zip", true, filename, nil
+	return rom.Game + ".zip", true, rom.Filename, nil
 }
 
 func (SimpleCompressed) ignorePath(relpath string) bool {
@@ -41,20 +46,44 @@ func (SimpleCompressed) ignorePath(relpath string) bool {
 
 type MegaSD struct{}
 
-func (MegaSD) exportPath(name, filename string) (string, bool, string, error) {
-	parent, err := firstAlphanumeric(name)
+func (MegaSD) exportPath(rom ROM) (string, bool, string, error) {
+	parent, err := firstAlphanumeric(rom.Game)
 	if err != nil {
 		return "", false, "", err
 	}
 
-	switch filepath.Ext(filename) {
-	case ".cue", ".bin":
-		re := regexp.MustCompile(`\s+\(Disc\s\d+\)\s*`)
-		dir := re.ReplaceAllString(name, "")
+	// Keep any machine BIOS images in a separate BIOS directory, as the
+	// MegaSD needs the Mega CD/Sega CD BIOS stored there at least, but
+	// let any built-in games fall through and get stored as normal
+	if strings.HasPrefix(rom.Filename, noIntroBIOS) {
+		switch {
+		case strings.Contains(rom.Filename, "32X"):
+			fallthrough
+		case strings.Contains(rom.Filename, "LaserActive"):
+			fallthrough
+		case strings.Contains(rom.Filename, "Mega-CD"):
+			fallthrough
+		case strings.Contains(rom.Filename, "Sega CD"):
+			fallthrough
+		case strings.Contains(rom.Filename, "WonderMega"):
+			return filepath.Join("BIOS", rom.Filename), false, "", nil
+		}
+	}
 
-		return filepath.Join(parent, dir, filename), false, "", nil
+	switch filepath.Ext(rom.Filename) {
+	case ".sms":
+		return filepath.Join("Master System & Mark III", parent, rom.Filename), false, "", nil
+	case ".md":
+		return filepath.Join("Mega Drive & Genesis", parent, rom.Filename), false, "", nil
+	case ".32x":
+		return filepath.Join("32X", parent, rom.Filename), false, "", nil
+	case ".cue", ".bin":
+		re := regexp.MustCompile(`\s+\(Disc\s\d+\)`)
+		dir := re.ReplaceAllString(rom.Game, "")
+
+		return filepath.Join("Mega CD & Sega CD", parent, dir, rom.Filename), false, "", nil
 	default:
-		return filepath.Join(parent, filename), false, "", nil
+		return filepath.Join(parent, rom.Filename), false, "", nil
 	}
 }
 
@@ -76,8 +105,8 @@ func (MegaSD) ignorePath(relpath string) bool {
 
 type JaguarSD struct{}
 
-func (JaguarSD) exportPath(name, filename string) (string, bool, string, error) {
-	return filename, false, "", nil
+func (JaguarSD) exportPath(rom ROM) (string, bool, string, error) {
+	return rom.Filename, false, "", nil
 }
 
 func (JaguarSD) ignorePath(relpath string) bool {
@@ -96,8 +125,8 @@ func (JaguarSD) ignorePath(relpath string) bool {
 
 type SD2SNES struct{}
 
-func (SD2SNES) exportPath(name, filename string) (string, bool, string, error) {
-	return filename, false, "", nil
+func (SD2SNES) exportPath(rom ROM) (string, bool, string, error) {
+	return rom.Filename, false, "", nil
 }
 
 func (SD2SNES) ignorePath(relpath string) bool {

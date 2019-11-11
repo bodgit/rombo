@@ -17,6 +17,9 @@ import (
 type ROM struct {
 	Game     string
 	Filename string
+	Size     uint64
+	CRC      string
+	SHA1     string
 }
 
 type Datafile struct {
@@ -108,38 +111,24 @@ func (d *Datafile) findROMByCRC(size uint64, crc string) ([]ROM, bool, error) {
 	if len(nodes) > 0 {
 		roms := make([]ROM, 0, len(nodes))
 		for _, node := range nodes {
-			roms = append(roms, ROM{Game: node.Parent().Attr("name"), Filename: node.Attr("name")})
+			size, err := strconv.ParseUint(node.Attr("size"), 10, 64)
+			if err != nil {
+				return nil, false, err
+			}
+
+			rom := ROM{
+				Game:     node.Parent().Attr("name"),
+				Filename: node.Attr("name"),
+				Size:     size,
+				CRC:      strings.ToLower(node.Attr("crc")),
+				SHA1:     strings.ToLower(node.Attr("sha1")),
+			}
+			roms = append(roms, rom)
 		}
 		return roms, true, nil
 	}
 
 	return nil, false, nil
-}
-
-func (d *Datafile) deleteROMByCRC(size uint64, crc string) error {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
-	nodes, err := d.output.Search("/datafile/game/rom[@size='" + strconv.FormatUint(size, 10) + "' and (@crc='" + strings.ToLower(crc) + "' or @crc='" + strings.ToUpper(crc) + "')]")
-	if err != nil {
-		return err
-	}
-
-	for _, rom := range nodes {
-		game := rom.Parent()
-		rom.Unlink()
-
-		roms, err := game.Search("rom")
-		if err != nil {
-			return err
-		}
-
-		if len(roms) == 0 {
-			game.Unlink()
-		}
-	}
-
-	return nil
 }
 
 func (d *Datafile) findROMBySHA1(size uint64, sha string) ([]ROM, bool, error) {
@@ -154,7 +143,19 @@ func (d *Datafile) findROMBySHA1(size uint64, sha string) ([]ROM, bool, error) {
 	if len(nodes) > 0 {
 		roms := make([]ROM, 0, len(nodes))
 		for _, node := range nodes {
-			roms = append(roms, ROM{Game: node.Parent().Attr("name"), Filename: node.Attr("name")})
+			size, err := strconv.ParseUint(node.Attr("size"), 10, 64)
+			if err != nil {
+				return nil, false, err
+			}
+
+			rom := ROM{
+				Game:     node.Parent().Attr("name"),
+				Filename: node.Attr("name"),
+				Size:     size,
+				CRC:      strings.ToLower(node.Attr("crc")),
+				SHA1:     strings.ToLower(node.Attr("sha1")),
+			}
+			roms = append(roms, rom)
 		}
 		return roms, true, nil
 	}
@@ -162,7 +163,7 @@ func (d *Datafile) findROMBySHA1(size uint64, sha string) ([]ROM, bool, error) {
 	return nil, false, nil
 }
 
-func (d *Datafile) deleteROM(rom ROM) error {
+func (d *Datafile) seenROM(rom ROM) error {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 
@@ -192,33 +193,7 @@ func (d *Datafile) deleteROM(rom ROM) error {
 	return nil
 }
 
-func (d *Datafile) deleteROMBySHA1(size uint64, sha string) error {
-	d.mutex.Lock()
-	defer d.mutex.Unlock()
-
-	nodes, err := d.output.Search("/datafile/game/rom[@size='" + strconv.FormatUint(size, 10) + "' and (@sha1='" + strings.ToLower(sha) + "' or @sha1='" + strings.ToUpper(sha) + "')]")
-	if err != nil {
-		return err
-	}
-
-	for _, rom := range nodes {
-		game := rom.Parent()
-		rom.Unlink()
-
-		roms, err := game.Search("rom")
-		if err != nil {
-			return err
-		}
-
-		if len(roms) == 0 {
-			game.Unlink()
-		}
-	}
-
-	return nil
-}
-
-func (d *Datafile) Games() (int, error) {
+func (d *Datafile) GamesRemaining() (int, error) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
 

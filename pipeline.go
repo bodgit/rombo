@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"io/ioutil"
 	"os"
@@ -121,7 +120,7 @@ func (r *Rombo) mergeResults(ctx context.Context, in ...<-chan results) (<-chan 
 }
 
 func (r *Rombo) sumResults(ctx context.Context, in <-chan results) (<-chan results, <-chan error, error) {
-	out := make(chan results)
+	out := make(chan results, 1)
 	errc := make(chan error, 1)
 	go func() {
 		defer close(out)
@@ -182,13 +181,13 @@ func (r *Rombo) cleanFile(ctx context.Context, dir string, in <-chan string) (<-
 		defer close(errc)
 	File:
 		for file := range in {
-			sha, length, err := sha1Sum(file)
+			sha, size, err := sha1Sum(file)
 			if err != nil {
 				errc <- err
 				return
 			}
 
-			roms, _, err := r.datafile.findROMBySHA1(length, sha)
+			roms, _, err := r.datafile.findROMBySHA1(size, sha)
 			if err != nil {
 				errc <- err
 				return
@@ -216,6 +215,8 @@ func (r *Rombo) cleanFile(ctx context.Context, dir string, in <-chan string) (<-
 					return
 				}
 			}
+
+			// FIXME Log file and bytes removed
 		}
 	}()
 	return out, errc, nil
@@ -228,13 +229,13 @@ func (r *Rombo) exportFile(ctx context.Context, dir string, in <-chan string) (<
 		defer close(out)
 		defer close(errc)
 		for file := range in {
-			sha, length, err := sha1Sum(file)
+			sha, size, err := sha1Sum(file)
 			if err != nil {
 				errc <- err
 				return
 			}
 
-			roms, _, err := r.datafile.findROMBySHA1(length, sha)
+			roms, _, err := r.datafile.findROMBySHA1(size, sha)
 			if err != nil {
 				errc <- err
 				return
@@ -252,14 +253,39 @@ func (r *Rombo) exportFile(ctx context.Context, dir string, in <-chan string) (<
 				if zipped {
 					// FIXME
 					r.logger.Println("would add", file, "to", fullpath, "as", name)
-				} else {
-					rsha, rlength, err := sha1Sum(fullpath)
+					ok, rcrc, rsize, err := fileExistsInZip(fullpath, name)
 					if err != nil && !os.IsNotExist(err) {
 						errc <- err
 						return
 					}
 
-					if os.IsNotExist(err) || rsha != sha || rlength != length {
+					switch {
+					case os.IsNotExist(err):
+						// Create
+					case !ok:
+						// Add
+					case rcrc != rom.CRC || rsize != size:
+						// Update
+					}
+
+					if os.IsNotExist(err) || !ok || rcrc != rom.CRC || rsize != size {
+						if r.destructive {
+							nsize, err := createOrUpdateZip(fullpath, file, name)
+							if err != nil {
+								errc <- err
+								return
+							}
+							fmt.Println(nsize)
+						}
+					}
+				} else {
+					rsha, rsize, err := sha1Sum(fullpath)
+					if err != nil && !os.IsNotExist(err) {
+						errc <- err
+						return
+					}
+
+					if os.IsNotExist(err) || rsha != sha || rsize != size {
 						r.logger.Printf("Copying \"%s\" to \"%s\"\n", file, fullpath)
 						if r.destructive {
 							if err := copyFile(file, fullpath); err != nil {
@@ -291,10 +317,7 @@ func (r *Rombo) readZip(file string, dir string) error {
 
 File:
 	for _, f := range reader.File {
-		crc := fmt.Sprintf("%.*x", crc32.Size<<1, f.CRC32)
-		//r.logger.Println("zip:", crc, file, f.Name)
-
-		roms, _, err := r.datafile.findROMByCRC(f.UncompressedSize64, crc)
+		roms, _, err := r.datafile.findROMByCRC(f.UncompressedSize64, zipCRC(f))
 		if err != nil {
 			return err
 		}
@@ -421,9 +444,7 @@ func (r *Rombo) exportZip(ctx context.Context, dir string, in <-chan string) (<-
 			}
 
 			for _, f := range reader.File {
-				crc := fmt.Sprintf("%.*x", crc32.Size<<1, f.CRC32)
-
-				roms, _, err := r.datafile.findROMByCRC(f.UncompressedSize64, crc)
+				roms, _, err := r.datafile.findROMByCRC(f.UncompressedSize64, zipCRC(f))
 				if err != nil {
 					errc <- err
 					return
@@ -480,20 +501,19 @@ func (r *Rombo) exportZip(ctx context.Context, dir string, in <-chan string) (<-
 	return out, errc, nil
 }
 
-func waitForPipeline(results <-chan results, errs ...<-chan error) (uint64, uint64, error) {
+func waitForPipeline(in <-chan results, errs ...<-chan error) (uint64, uint64, error) {
 	errc := mergeErrors(errs...)
 	for err := range errc {
 		if err != nil {
 			return 0, 0, err
 		}
 	}
-	//var totals results
-	//select {
-	//case totals <- results:
-	//default:
-	//}
-	totals := <-results
-	return totals.Files, totals.Bytes, nil
+	var total results
+	select {
+	case total = <-in:
+	default:
+	}
+	return total.Files, total.Bytes, nil
 }
 
 func mergeErrors(cs ...<-chan error) <-chan error {

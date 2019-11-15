@@ -102,7 +102,6 @@ func (r *Rombo) mergeResults(ctx context.Context, in ...<-chan results) (<-chan 
 		go func(c <-chan results) {
 			defer wg.Done()
 			for n := range c {
-				fmt.Println(n)
 				select {
 				case out <- n:
 				case <-ctx.Done():
@@ -127,7 +126,6 @@ func (r *Rombo) sumResults(ctx context.Context, in <-chan results) (<-chan resul
 		defer close(errc)
 		total := results{}
 		for n := range in {
-			fmt.Println(n)
 			total.Files += n.Files
 			total.Bytes += n.Bytes
 		}
@@ -155,7 +153,7 @@ func (r *Rombo) mimeSplitter(ctx context.Context, in <-chan string) (<-chan stri
 				return
 			}
 			switch extension {
-			case "zip":
+			case "zip", "xlsx": // One zip so far has been misidentified as a .xlsx
 				select {
 				case zip <- file:
 				case <-ctx.Done():
@@ -173,56 +171,102 @@ func (r *Rombo) mimeSplitter(ctx context.Context, in <-chan string) (<-chan stri
 	return out, zip, errc, nil
 }
 
-func (r *Rombo) cleanFile(ctx context.Context, dir string, in <-chan string) (<-chan results, <-chan error, error) {
-	out := make(chan results)
-	errc := make(chan error, 1)
-	go func() {
-		defer close(out)
-		defer close(errc)
-	File:
-		for file := range in {
-			sha, size, err := sha1Sum(file)
-			if err != nil {
-				errc <- err
-				return
-			}
+func (r *Rombo) cleanFile(ctx context.Context, dir, file, sha string, size uint64, roms []ROM) (results, error) {
+	results := results{}
+	matched := false
 
-			roms, _, err := r.datafile.findROMBySHA1(size, sha)
-			if err != nil {
-				errc <- err
-				return
-			}
+	for _, rom := range roms {
+		relpath, _, _, err := r.layout.exportPath(rom)
+		if err != nil {
+			return results, err
+		}
 
-			for _, rom := range roms {
-				relpath, _, _, err := r.layout.exportPath(rom)
-				if err != nil {
-					errc <- err
-					return
-				}
+		fullpath := filepath.Join(dir, relpath)
 
-				fullpath := filepath.Join(dir, relpath)
+		if fullpath == file {
+			matched = true
+			break
+		}
+	}
 
-				if fullpath == file {
-					continue File
-				}
-			}
+	if !matched {
+		r.logger.Printf("Deleting \"%s\"\n", file)
 
-			r.logger.Printf("Deleting \"%s\"\n", file)
-
-			if r.destructive {
-				if err := os.Remove(file); err != nil {
-					errc <- err
-					return
-				}
+		if r.destructive {
+			if err := os.Remove(file); err != nil {
+				return results, err
 			}
 
 			// FIXME Log file and bytes removed
 		}
-	}()
-	return out, errc, nil
+	}
+
+	return results, nil
 }
 
-func (r *Rombo) exportFile(ctx context.Context, dir string, in <-chan string) (<-chan results, <-chan error, error) {
+func (r *Rombo) exportFile(ctx context.Context, dir, file, sha string, size uint64, roms []ROM) (results, error) {
+	results := results{}
+
+	for _, rom := range roms {
+		relpath, zipped, name, err := r.layout.exportPath(rom)
+		if err != nil {
+			return results, err
+		}
+
+		fullpath := filepath.Join(dir, relpath)
+
+		if zipped {
+			ok, rcrc, rsize, err := fileExistsInZip(fullpath, name)
+			if err != nil && !os.IsNotExist(err) {
+				return results, err
+			}
+
+			if os.IsNotExist(err) || !ok || rcrc != rom.CRC || rsize != size {
+				r.logger.Printf("Adding \"%s\" to \"%s\" as \"%s\"\n", file, fullpath, name)
+				if r.destructive {
+					f, err := os.Open(file)
+					if err != nil {
+						return results, err
+					}
+
+					_, err = createOrUpdateZip(fullpath, name, f)
+					if err != nil {
+						f.Close()
+						return results, err
+					}
+
+					f.Close()
+
+					// FIXME Log file and bytes added/replaced
+				}
+			}
+		} else {
+			rsha, rsize, err := sha1Sum(fullpath)
+			if err != nil && !os.IsNotExist(err) {
+				return results, err
+			}
+
+			if os.IsNotExist(err) || rsha != sha || rsize != size {
+				r.logger.Printf("Copying \"%s\" to \"%s\"\n", file, fullpath)
+				if r.destructive {
+					if err := copyFile(file, fullpath); err != nil {
+						return results, err
+					}
+
+					// FIXME Log file and bytes added/replaced
+				}
+			}
+		}
+
+		if err := r.datafile.seenROM(rom); err != nil {
+			return results, err
+		}
+	}
+
+	return results, nil
+}
+
+func (r *Rombo) fileWorker(ctx context.Context, dir string, f func(context.Context, string, string, string, uint64, []ROM) (results, error), in <-chan string) (<-chan results, <-chan error, error) {
 	out := make(chan results)
 	errc := make(chan error, 1)
 	go func() {
@@ -241,65 +285,18 @@ func (r *Rombo) exportFile(ctx context.Context, dir string, in <-chan string) (<
 				return
 			}
 
-			for _, rom := range roms {
-				relpath, zipped, name, err := r.layout.exportPath(rom)
-				if err != nil {
-					errc <- err
-					return
-				}
+			r.logger.Println(file)
 
-				fullpath := filepath.Join(dir, relpath)
+			results, err := f(ctx, dir, file, sha, size, roms)
+			if err != nil {
+				errc <- err
+				return
+			}
 
-				if zipped {
-					// FIXME
-					r.logger.Println("would add", file, "to", fullpath, "as", name)
-					ok, rcrc, rsize, err := fileExistsInZip(fullpath, name)
-					if err != nil && !os.IsNotExist(err) {
-						errc <- err
-						return
-					}
-
-					switch {
-					case os.IsNotExist(err):
-						// Create
-					case !ok:
-						// Add
-					case rcrc != rom.CRC || rsize != size:
-						// Update
-					}
-
-					if os.IsNotExist(err) || !ok || rcrc != rom.CRC || rsize != size {
-						if r.destructive {
-							nsize, err := createOrUpdateZip(fullpath, file, name)
-							if err != nil {
-								errc <- err
-								return
-							}
-							fmt.Println(nsize)
-						}
-					}
-				} else {
-					rsha, rsize, err := sha1Sum(fullpath)
-					if err != nil && !os.IsNotExist(err) {
-						errc <- err
-						return
-					}
-
-					if os.IsNotExist(err) || rsha != sha || rsize != size {
-						r.logger.Printf("Copying \"%s\" to \"%s\"\n", file, fullpath)
-						if r.destructive {
-							if err := copyFile(file, fullpath); err != nil {
-								errc <- err
-								return
-							}
-						}
-					}
-				}
-
-				if err := r.datafile.seenROM(rom); err != nil {
-					errc <- err
-					return
-				}
+			select {
+			case out <- results:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
@@ -501,6 +498,19 @@ func (r *Rombo) exportZip(ctx context.Context, dir string, in <-chan string) (<-
 	return out, errc, nil
 }
 
+func (r *Rombo) zipWorker(ctx context.Context, dir string, in <-chan string) (<-chan results, <-chan error, error) {
+	out := make(chan results)
+	errc := make(chan error, 1)
+	go func() {
+		defer close(out)
+		defer close(errc)
+		for file := range in {
+			fmt.Println(file)
+		}
+	}()
+	return out, errc, nil
+}
+
 func waitForPipeline(in <-chan results, errs ...<-chan error) (uint64, uint64, error) {
 	errc := mergeErrors(errs...)
 	for err := range errc {
@@ -556,7 +566,7 @@ func (r *Rombo) Clean(dir string) (uint64, uint64, error) {
 	var resultcList []<-chan results
 
 	for i := 0; i < 10; i++ {
-		resultc, errc, err := r.cleanFile(ctx, dir, filec)
+		resultc, errc, err := r.fileWorker(ctx, dir, r.cleanFile, filec)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -617,7 +627,7 @@ func (r *Rombo) Export(dir string, dirs []string) (uint64, uint64, error) {
 	var resultcList []<-chan results
 
 	for i := 0; i < 10; i++ {
-		resultc, errc, err := r.exportFile(ctx, dir, filec)
+		resultc, errc, err := r.fileWorker(ctx, dir, r.exportFile, filec)
 		if err != nil {
 			return 0, 0, err
 		}

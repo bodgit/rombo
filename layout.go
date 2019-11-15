@@ -59,11 +59,19 @@ func (MegaSD) exportPath(rom ROM) (string, bool, string, error) {
 		switch {
 		case strings.Contains(rom.Filename, "32X"):
 			fallthrough
+		case strings.Contains(rom.Filename, "Aiwa CSD-GM1"):
+			fallthrough
 		case strings.Contains(rom.Filename, "LaserActive"):
 			fallthrough
 		case strings.Contains(rom.Filename, "Mega-CD"):
 			fallthrough
+		case strings.Contains(rom.Filename, "Multi-Mega"):
+			fallthrough
 		case strings.Contains(rom.Filename, "Sega CD"):
+			fallthrough
+		case strings.Contains(rom.Filename, "Sega Master System"):
+			fallthrough
+		case strings.Contains(rom.Filename, "Sega Mega Drive"):
 			fallthrough
 		case strings.Contains(rom.Filename, "WonderMega"):
 			return filepath.Join("BIOS", rom.Filename), false, "", nil
@@ -78,10 +86,25 @@ func (MegaSD) exportPath(rom ROM) (string, bool, string, error) {
 	case ".32x":
 		return filepath.Join("32X", parent, rom.Filename), false, "", nil
 	case ".cue", ".bin":
+		// For multiple disc games all files must be in the same
+		// directory so the directory should have any "(Disc X)"
+		// strings removed
 		re := regexp.MustCompile(`\s+\(Disc\s\d+\)`)
 		dir := re.ReplaceAllString(rom.Game, "")
 
-		return filepath.Join("Mega CD & Sega CD", parent, dir, rom.Filename), false, "", nil
+		// Annoyingly, some Redump entries have further per-disc
+		// strings that need to be removed so that all files have a
+		// common directory
+
+		// Supreme Warrior (USA)
+		re = regexp.MustCompile(`\s+\((?:Fire\s&\sEarth|Wind\s&\sFang\sTu)\)`)
+		dir = re.ReplaceAllString(dir, "")
+
+		// Slam City with Scottie Pippen
+		re = regexp.MustCompile(`\s+\((?:Fingers|Juice|Mad\sDog|Smash)\)`)
+		dir = re.ReplaceAllString(dir, "")
+
+		return filepath.Join("Mega-CD & Sega CD", parent, dir, rom.Filename), false, "", nil
 	default:
 		return filepath.Join(parent, rom.Filename), false, "", nil
 	}
@@ -92,6 +115,11 @@ func (MegaSD) ignorePath(relpath string) bool {
 	case "BUP", "CHEATS", "STATES", "lastmsd.cfg": // System files
 		fallthrough
 	case filepath.Join("BIOS", "bios.cfg"): // Mega CD BIOS configuration
+		return true
+	}
+
+	switch filepath.Base(relpath) {
+	case "games.dbs": // Optional metadata databases
 		return true
 	}
 

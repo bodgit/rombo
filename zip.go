@@ -32,7 +32,7 @@ func fileExistsInZip(path, name string) (bool, string, uint64, error) {
 	return false, "", 0, nil
 }
 
-func createOrUpdateZip(path, file, name string) (uint64, error) {
+func createOrUpdateZip(path, name string, fr io.Reader) (uint64, error) {
 	tmpfile, err := ioutil.TempFile(filepath.Dir(path), "."+filepath.Base(path))
 	if err != nil {
 		return 0, err
@@ -78,12 +78,6 @@ func createOrUpdateZip(path, file, name string) (uint64, error) {
 		reader.Close()
 	}
 
-	fr, err := os.Open(file)
-	if err != nil {
-		return 0, err
-	}
-	defer fr.Close()
-
 	fw, err := w.Create(name)
 	if err != nil {
 		return 0, err
@@ -91,10 +85,6 @@ func createOrUpdateZip(path, file, name string) (uint64, error) {
 
 	_, err = io.Copy(fw, fr)
 	if err != nil {
-		return 0, err
-	}
-
-	if err := fr.Close(); err != nil {
 		return 0, err
 	}
 
@@ -111,7 +101,7 @@ func createOrUpdateZip(path, file, name string) (uint64, error) {
 		return 0, err
 	}
 
-	if err := os.Rename(tmpfile.Name(), file); err != nil {
+	if err := os.Rename(tmpfile.Name(), path); err != nil {
 		return 0, err
 	}
 

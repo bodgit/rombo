@@ -178,9 +178,16 @@ func verify(c *cli.Context) error {
 		return cli.NewExitError(err, 1)
 	}
 
-	if err := r.Verify(c.Args()); err != nil {
+	start := time.Now()
+
+	files, bytes, err := r.Verify(c.Args())
+	if err != nil {
 		return cli.NewExitError(err, 1)
 	}
+
+	elapsed := time.Since(start)
+
+	logger.Println("files:", files, "bytes:", bytes, "time:", elapsed)
 
 	games, err := datafile.GamesRemaining()
 	if err != nil {

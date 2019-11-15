@@ -266,6 +266,18 @@ func (r *Rombo) exportFile(ctx context.Context, dir, file, sha string, size uint
 	return results, nil
 }
 
+func (r *Rombo) verifyFile(ctx context.Context, dir, file, sha string, size uint64, roms []ROM) (results, error) {
+	results := results{}
+
+	for _, rom := range roms {
+		if err := r.datafile.seenROM(rom); err != nil {
+			return results, err
+		}
+	}
+
+	return results, nil
+}
+
 func (r *Rombo) fileWorker(ctx context.Context, dir string, f func(context.Context, string, string, string, uint64, []ROM) (results, error), in <-chan string) (<-chan results, <-chan error, error) {
 	out := make(chan results)
 	errc := make(chan error, 1)
@@ -657,6 +669,63 @@ func (r *Rombo) Export(dir string, dirs []string) (uint64, uint64, error) {
 	return waitForPipeline(totalc, errcList...)
 }
 
-func (r *Rombo) Verify(dirs []string) error {
-	return nil
+func (r *Rombo) Verify(dirs []string) (uint64, uint64, error) {
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	defer cancelFunc()
+
+	var filecList []<-chan string
+	var errcList []<-chan error
+
+	for _, dir := range dirs {
+		filec, errc, err := r.findFiles(ctx, dir)
+		if err != nil {
+			return 0, 0, err
+		}
+		filecList = append(filecList, filec)
+		errcList = append(errcList, errc)
+	}
+
+	mergec, errc, err := r.mergeFiles(ctx, filecList...)
+	if err != nil {
+		return 0, 0, err
+	}
+	errcList = append(errcList, errc)
+
+	filec, zipc, errc, err := r.mimeSplitter(ctx, mergec)
+	if err != nil {
+		return 0, 0, err
+	}
+	errcList = append(errcList, errc)
+
+	var resultcList []<-chan results
+
+	for i := 0; i < 10; i++ {
+		resultc, errc, err := r.fileWorker(ctx, "", r.verifyFile, filec)
+		if err != nil {
+			return 0, 0, err
+		}
+		resultcList = append(resultcList, resultc)
+		errcList = append(errcList, errc)
+
+		resultc, errc, err = r.exportZip(ctx, "", zipc)
+		if err != nil {
+			return 0, 0, err
+		}
+		resultcList = append(resultcList, resultc)
+		errcList = append(errcList, errc)
+	}
+
+	resultc, errc, err := r.mergeResults(ctx, resultcList...)
+	if err != nil {
+		return 0, 0, err
+	}
+	errcList = append(errcList, errc)
+
+	totalc, errc, err := r.sumResults(ctx, resultc)
+	if err != nil {
+		return 0, 0, err
+	}
+	errcList = append(errcList, errc)
+
+	return waitForPipeline(totalc, errcList...)
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bodgit/rombo"
+	"github.com/dustin/go-humanize"
 	"github.com/urfave/cli"
 )
 
@@ -80,25 +81,25 @@ func export(c *cli.Context) error {
 
 	start := time.Now()
 
-	files, bytes, err := r.Export(c.Args().First(), c.Args().Tail())
+	bytesRx, bytesTx, err := r.Export(c.Args().First(), c.Args().Tail())
 	if err != nil {
 		return cli.NewExitError(err, 1)
 	}
 
 	elapsed := time.Since(start)
 
-	logger.Println("files:", files, "bytes:", bytes, "time:", elapsed)
+	logger.Println("bytes read:", humanize.Bytes(bytesRx), "bytes written:", humanize.Bytes(bytesTx), "time:", elapsed)
 
 	start = time.Now()
 
-	files, bytes, err = r.Clean(c.Args().First())
+	bytesRx, bytesTx, err = r.Clean(c.Args().First())
 	if err != nil {
 		return cli.NewExitError(err, 1)
 	}
 
 	elapsed = time.Since(start)
 
-	logger.Println("files:", files, "bytes:", bytes, "time:", elapsed)
+	logger.Println("bytes read:", humanize.Bytes(bytesRx), "bytes written:", humanize.Bytes(bytesTx), "time:", elapsed)
 
 	games, err := datafile.GamesRemaining()
 	if err != nil {

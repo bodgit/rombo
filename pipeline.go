@@ -11,13 +11,14 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/bodgit/rombo/internal/plumbing"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/uwedeportivo/torrentzip"
 )
 
-type results struct {
-	Files uint64
-	Bytes uint64
+type ioCounter struct {
+	bytesRx uint64
+	bytesTx uint64
 }
 
 func (r *Rombo) findFiles(ctx context.Context, dir string) (<-chan string, <-chan error, error) {
@@ -93,13 +94,13 @@ func (r *Rombo) mergeFiles(ctx context.Context, in ...<-chan string) (<-chan str
 	return out, errc, nil
 }
 
-func (r *Rombo) mergeResults(ctx context.Context, in ...<-chan results) (<-chan results, <-chan error, error) {
+func (r *Rombo) mergeResults(ctx context.Context, in ...<-chan ioCounter) (<-chan ioCounter, <-chan error, error) {
 	var wg sync.WaitGroup
-	out := make(chan results)
+	out := make(chan ioCounter)
 	errc := make(chan error, 1)
 	wg.Add(len(in))
 	for _, c := range in {
-		go func(c <-chan results) {
+		go func(c <-chan ioCounter) {
 			defer wg.Done()
 			for n := range c {
 				select {
@@ -118,16 +119,16 @@ func (r *Rombo) mergeResults(ctx context.Context, in ...<-chan results) (<-chan 
 	return out, errc, nil
 }
 
-func (r *Rombo) sumResults(ctx context.Context, in <-chan results) (<-chan results, <-chan error, error) {
-	out := make(chan results, 1)
+func (r *Rombo) sumResults(ctx context.Context, in <-chan ioCounter) (<-chan ioCounter, <-chan error, error) {
+	out := make(chan ioCounter, 1)
 	errc := make(chan error, 1)
 	go func() {
 		defer close(out)
 		defer close(errc)
-		total := results{}
+		total := ioCounter{}
 		for n := range in {
-			total.Files += n.Files
-			total.Bytes += n.Bytes
+			total.bytesRx += n.bytesRx
+			total.bytesTx += n.bytesTx
 		}
 		select {
 		case out <- total:
@@ -171,8 +172,8 @@ func (r *Rombo) mimeSplitter(ctx context.Context, in <-chan string) (<-chan stri
 	return out, zip, errc, nil
 }
 
-func (r *Rombo) cleanFile(ctx context.Context, dir, file, sha string, size uint64, roms []ROM) (results, error) {
-	results := results{}
+func (r *Rombo) cleanFile(ctx context.Context, dir, file, sha string, size uint64, roms []ROM) (ioCounter, error) {
+	results := ioCounter{}
 	matched := false
 
 	for _, rom := range roms {
@@ -204,8 +205,8 @@ func (r *Rombo) cleanFile(ctx context.Context, dir, file, sha string, size uint6
 	return results, nil
 }
 
-func (r *Rombo) exportFile(ctx context.Context, dir, file, sha string, size uint64, roms []ROM) (results, error) {
-	results := results{}
+func (r *Rombo) exportFile(ctx context.Context, dir, file, sha string, size uint64, roms []ROM) (ioCounter, error) {
+	results := ioCounter{}
 
 	for _, rom := range roms {
 		relpath, zipped, name, err := r.layout.exportPath(rom)
@@ -229,7 +230,7 @@ func (r *Rombo) exportFile(ctx context.Context, dir, file, sha string, size uint
 						return results, err
 					}
 
-					_, err = createOrUpdateZip(fullpath, name, f)
+					bytesRx, bytesTx, err := createOrUpdateZip(fullpath, name, f)
 					if err != nil {
 						f.Close()
 						return results, err
@@ -266,8 +267,8 @@ func (r *Rombo) exportFile(ctx context.Context, dir, file, sha string, size uint
 	return results, nil
 }
 
-func (r *Rombo) verifyFile(ctx context.Context, dir, file, sha string, size uint64, roms []ROM) (results, error) {
-	results := results{}
+func (r *Rombo) verifyFile(ctx context.Context, dir, file, sha string, size uint64, roms []ROM) (ioCounter, error) {
+	results := ioCounter{}
 
 	for _, rom := range roms {
 		if err := r.datafile.seenROM(rom); err != nil {
@@ -278,8 +279,8 @@ func (r *Rombo) verifyFile(ctx context.Context, dir, file, sha string, size uint
 	return results, nil
 }
 
-func (r *Rombo) fileWorker(ctx context.Context, dir string, f func(context.Context, string, string, string, uint64, []ROM) (results, error), in <-chan string) (<-chan results, <-chan error, error) {
-	out := make(chan results)
+func (r *Rombo) fileWorker(ctx context.Context, dir string, f func(context.Context, string, string, string, uint64, []ROM) (ioCounter, error), in <-chan string) (<-chan ioCounter, <-chan error, error) {
+	out := make(chan ioCounter)
 	errc := make(chan error, 1)
 	go func() {
 		defer close(out)
@@ -304,6 +305,9 @@ func (r *Rombo) fileWorker(ctx context.Context, dir string, f func(context.Conte
 				errc <- err
 				return
 			}
+
+			// We have read the whole file in order to compute the SHA1
+			results.bytesRx += size
 
 			select {
 			case out <- results:
@@ -423,8 +427,8 @@ File:
 	return nil
 }
 
-func (r *Rombo) cleanZip(ctx context.Context, dir string, in <-chan string) (<-chan results, <-chan error, error) {
-	out := make(chan results)
+func (r *Rombo) cleanZip(ctx context.Context, dir string, in <-chan string) (<-chan ioCounter, <-chan error, error) {
+	out := make(chan ioCounter)
 	errc := make(chan error, 1)
 	go func() {
 		defer close(out)
@@ -439,14 +443,30 @@ func (r *Rombo) cleanZip(ctx context.Context, dir string, in <-chan string) (<-c
 	return out, errc, nil
 }
 
-func (r *Rombo) exportZip(ctx context.Context, dir string, in <-chan string) (<-chan results, <-chan error, error) {
-	out := make(chan results)
+func (r *Rombo) exportZip(ctx context.Context, dir string, in <-chan string) (<-chan ioCounter, <-chan error, error) {
+	out := make(chan ioCounter)
 	errc := make(chan error, 1)
 	go func() {
 		defer close(out)
 		defer close(errc)
 		for file := range in {
-			reader, err := zip.OpenReader(file)
+			results := ioCounter{}
+
+			zipf, err := os.Open(file)
+			if err != nil {
+				errc <- err
+				return
+			}
+
+			info, err := zipf.Stat()
+			if err != nil {
+				errc <- err
+				return
+			}
+
+			bytesRx := &plumbing.WriteCounter{}
+
+			reader, err := zip.NewReader(plumbing.TeeReaderAt(zipf, bytesRx), info.Size())
 			if err != nil {
 				errc <- err
 				return
@@ -478,6 +498,9 @@ func (r *Rombo) exportZip(ctx context.Context, dir string, in <-chan string) (<-
 							return
 						}
 
+						// We have read the whole file in order to compute the SHA1
+						results.bytesRx += rlength
+
 						if os.IsNotExist(err) || rsha != rom.SHA1 || rlength != f.UncompressedSize64 {
 							r.logger.Printf("Extracting \"%s\" from \"%s\" to \"%s\"\n", f.Name, file, fullpath)
 							if r.destructive {
@@ -493,6 +516,9 @@ func (r *Rombo) exportZip(ctx context.Context, dir string, in <-chan string) (<-
 								}
 
 								fr.Close()
+
+								// We have written out the uncompressed size
+								results.bytesTx += f.UncompressedSize64
 							}
 						}
 					}
@@ -504,38 +530,121 @@ func (r *Rombo) exportZip(ctx context.Context, dir string, in <-chan string) (<-
 				}
 			}
 
-			reader.Close()
+			zipf.Close()
+
+			// Add the total zip read bytes
+			results.bytesRx += bytesRx.Count()
+
+			select {
+			case out <- results:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	return out, errc, nil
 }
 
-func (r *Rombo) zipWorker(ctx context.Context, dir string, in <-chan string) (<-chan results, <-chan error, error) {
-	out := make(chan results)
+func (r *Rombo) zipWorker(ctx context.Context, dir string, in <-chan string) (<-chan ioCounter, <-chan error, error) {
+	out := make(chan ioCounter)
 	errc := make(chan error, 1)
 	go func() {
 		defer close(out)
 		defer close(errc)
 		for file := range in {
 			fmt.Println(file)
+			/*
+				results, err := f(dir, file)
+				if err != nil {
+					errc <- err
+					return
+				}
+
+				select {
+				case out <- results:
+				case <-ctx.Done():
+					return
+				}
+			*/
+			/*
+				reader, err := zip.OpenReader(file)
+				if err != nil {
+					errc <- err
+					return
+				}
+
+				for _, f := range reader.File {
+					roms, _, err := r.datafile.findROMByCRC(f.UncompressedSize64, zipCRC(f))
+					if err != nil {
+						errc <- err
+						return
+					}
+
+					for _, rom := range roms {
+						relpath, zipped, name, err := r.layout.exportPath(rom)
+						if err != nil {
+							errc <- err
+							return
+						}
+
+						fullpath := filepath.Join(dir, relpath)
+
+						if zipped {
+							// FIXME
+							r.logger.Println("would extract", f.Name, "from", file, "and add it to", fullpath, "as", name)
+						} else {
+							rsha, rlength, err := sha1Sum(fullpath)
+							if err != nil && !os.IsNotExist(err) {
+								errc <- err
+								return
+							}
+
+							if os.IsNotExist(err) || rsha != rom.SHA1 || rlength != f.UncompressedSize64 {
+								r.logger.Printf("Extracting \"%s\" from \"%s\" to \"%s\"\n", f.Name, file, fullpath)
+								if r.destructive {
+									fr, err := f.Open()
+									if err != nil {
+										errc <- err
+										return
+									}
+
+									if err := writeFile(fr, fullpath); err != nil {
+										errc <- err
+										return
+									}
+
+									fr.Close()
+								}
+							}
+						}
+
+						if err := r.datafile.seenROM(rom); err != nil {
+							errc <- err
+							return
+						}
+					}
+				}
+
+				reader.Close()
+			*/
 		}
 	}()
 	return out, errc, nil
 }
 
-func waitForPipeline(in <-chan results, errs ...<-chan error) (uint64, uint64, error) {
+func waitForPipeline(in <-chan ioCounter, errs ...<-chan error) (uint64, uint64, error) {
 	errc := mergeErrors(errs...)
 	for err := range errc {
 		if err != nil {
 			return 0, 0, err
 		}
 	}
-	var total results
+	var total ioCounter
 	select {
 	case total = <-in:
 	default:
 	}
-	return total.Files, total.Bytes, nil
+	return total.bytesRx, total.bytesTx, nil
 }
 
 func mergeErrors(cs ...<-chan error) <-chan error {
@@ -575,7 +684,7 @@ func (r *Rombo) Clean(dir string) (uint64, uint64, error) {
 	}
 	errcList = append(errcList, errc)
 
-	var resultcList []<-chan results
+	var resultcList []<-chan ioCounter
 
 	for i := 0; i < 10; i++ {
 		resultc, errc, err := r.fileWorker(ctx, dir, r.cleanFile, filec)
@@ -636,7 +745,7 @@ func (r *Rombo) Export(dir string, dirs []string) (uint64, uint64, error) {
 	}
 	errcList = append(errcList, errc)
 
-	var resultcList []<-chan results
+	var resultcList []<-chan ioCounter
 
 	for i := 0; i < 10; i++ {
 		resultc, errc, err := r.fileWorker(ctx, dir, r.exportFile, filec)
@@ -697,7 +806,7 @@ func (r *Rombo) Verify(dirs []string) (uint64, uint64, error) {
 	}
 	errcList = append(errcList, errc)
 
-	var resultcList []<-chan results
+	var resultcList []<-chan ioCounter
 
 	for i := 0; i < 10; i++ {
 		resultc, errc, err := r.fileWorker(ctx, "", r.verifyFile, filec)

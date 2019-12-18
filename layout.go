@@ -131,13 +131,13 @@ func (MegaSD) ignorePath(relpath string) bool {
 	return false
 }
 
-type JaguarSD struct{}
+type JaguarGD struct{}
 
-func (JaguarSD) exportPath(rom ROM) (string, bool, string, error) {
+func (JaguarGD) exportPath(rom ROM) (string, bool, string, error) {
 	return rom.Filename, false, "", nil
 }
 
-func (JaguarSD) ignorePath(relpath string) bool {
+func (JaguarGD) ignorePath(relpath string) bool {
 	switch relpath {
 	case "firmware.upd": // Firmware update
 		return true

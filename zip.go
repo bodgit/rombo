@@ -2,6 +2,7 @@ package rombo
 
 import (
 	"archive/zip"
+	"crypto/sha1"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -9,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bodgit/rombo/internal/plumbing"
 	"github.com/uwedeportivo/torrentzip"
 )
 
@@ -18,18 +18,7 @@ func zipCRC(f *zip.File) string {
 }
 
 func fileExistsInZip(path, name string) (bool, string, uint64, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return false, "", 0, err
-	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return false, "", 0, err
-	}
-
-	reader, err := zip.NewReader(plumbing.TeeReaderAt(file, &plumbing.WriteCounter{}), info.Size())
+	reader, err := zip.OpenReader(path)
 	if err != nil {
 		return false, "", 0, err
 	}
@@ -43,38 +32,25 @@ func fileExistsInZip(path, name string) (bool, string, uint64, error) {
 	return false, "", 0, nil
 }
 
-func createOrUpdateZip(path, name string, fr io.Reader) (uint64, uint64, error) {
+func createOrUpdateZip(path, name string, fr io.Reader) error {
 	tmpfile, err := ioutil.TempFile(filepath.Dir(path), "."+filepath.Base(path))
 	if err != nil {
-		return 0, 0, err
+		return err
 	}
 	defer os.Remove(tmpfile.Name())
 
-	bytesIn := &plumbing.WriteCounter{}
-	bytesOut := &plumbing.WriteCounter{}
-
-	w, err := torrentzip.NewWriter(io.MultiWriter(tmpfile, bytesOut))
+	w, err := torrentzip.NewWriter(tmpfile)
 	if err != nil {
-		return 0, 0, err
+		return err
 	}
 
-	file, err := os.Open(path)
+	reader, err := zip.OpenReader(path)
 	if err != nil && !os.IsNotExist(err) {
-		return 0, 0, err
+		return err
 	}
 
 	if err == nil {
-		defer file.Close()
-
-		info, err := file.Stat()
-		if err != nil {
-			return 0, 0, err
-		}
-
-		reader, err := zip.NewReader(plumbing.TeeReaderAt(file, bytesIn), info.Size())
-		if err != nil {
-			return 0, 0, err
-		}
+		defer reader.Close()
 
 		for _, f := range reader.File {
 			if name == f.Name {
@@ -83,46 +59,96 @@ func createOrUpdateZip(path, name string, fr io.Reader) (uint64, uint64, error) 
 
 			fr, err := f.Open()
 			if err != nil {
-				return 0, 0, err
+				return err
 			}
 
 			fw, err := w.Create(f.Name)
 			if err != nil {
-				return 0, 0, err
+				return err
 			}
 
 			_, err = io.Copy(fw, fr)
 			if err != nil {
-				return 0, 0, err
+				return err
 			}
 
 			fr.Close()
 		}
 
-		file.Close()
+		reader.Close()
 	}
 
 	fw, err := w.Create(name)
 	if err != nil {
-		return 0, 0, err
+		return err
 	}
 
 	_, err = io.Copy(fw, fr)
 	if err != nil {
-		return 0, 0, err
+		return err
 	}
 
 	if err := w.Close(); err != nil {
-		return 0, 0, err
+		return err
 	}
 
 	if err := tmpfile.Close(); err != nil {
-		return 0, 0, err
+		return err
 	}
 
 	if err := os.Rename(tmpfile.Name(), path); err != nil {
-		return 0, 0, err
+		return err
 	}
 
-	return bytesIn.Count(), bytesOut.Count(), nil
+	return nil
+}
+
+func recreateZip(path string) (string, string, error) {
+	tmpfile, err := ioutil.TempFile(os.TempDir(), filepath.Base(path))
+	if err != nil {
+		return "", "", err
+	}
+
+	h := sha1.New()
+
+	// Create new zip and compute SHA1 at the same time
+	w, err := torrentzip.NewWriter(io.MultiWriter(tmpfile, h))
+	if err != nil {
+		return "", "", err
+	}
+
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer reader.Close()
+
+	for _, f := range reader.File {
+		fr, err := f.Open()
+		if err != nil {
+			return "", "", err
+		}
+
+		fw, err := w.Create(f.Name)
+		if err != nil {
+			return "", "", err
+		}
+
+		_, err = io.Copy(fw, fr)
+		if err != nil {
+			return "", "", err
+		}
+
+		fr.Close()
+	}
+
+	if err := w.Close(); err != nil {
+		return "", "", err
+	}
+
+	if err := tmpfile.Close(); err != nil {
+		return "", "", err
+	}
+
+	return tmpfile.Name(), fmt.Sprintf("%x", h.Sum(nil)), nil
 }

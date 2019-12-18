@@ -10,13 +10,12 @@ import (
 	"time"
 
 	"github.com/bodgit/rombo"
-	"github.com/dustin/go-humanize"
 	"github.com/urfave/cli"
 )
 
 var stringToLayout = map[string]rombo.Layout{
 	"simple":  rombo.SimpleCompressed{},
-	"jaguar":  rombo.JaguarSD{},
+	"jaguar":  rombo.JaguarGD{},
 	"megasd":  rombo.MegaSD{},
 	"sd2snes": rombo.SD2SNES{},
 }
@@ -80,26 +79,20 @@ func export(c *cli.Context) error {
 	}
 
 	start := time.Now()
-
-	bytesRx, bytesTx, err := r.Export(c.Args().First(), c.Args().Tail())
-	if err != nil {
+	if err := r.Export(c.Args().First(), c.Args().Tail()); err != nil {
 		return cli.NewExitError(err, 1)
 	}
-
 	elapsed := time.Since(start)
 
-	logger.Println("bytes read:", humanize.Bytes(bytesRx), "bytes written:", humanize.Bytes(bytesTx), "time:", elapsed)
+	logger.Println("Export finished in", elapsed)
 
 	start = time.Now()
-
-	bytesRx, bytesTx, err = r.Clean(c.Args().First())
-	if err != nil {
+	if err := r.Clean(c.Args().First()); err != nil {
 		return cli.NewExitError(err, 1)
 	}
-
 	elapsed = time.Since(start)
 
-	logger.Println("bytes read:", humanize.Bytes(bytesRx), "bytes written:", humanize.Bytes(bytesTx), "time:", elapsed)
+	logger.Println("Clean finished in", elapsed)
 
 	games, err := datafile.GamesRemaining()
 	if err != nil {
@@ -180,15 +173,12 @@ func verify(c *cli.Context) error {
 	}
 
 	start := time.Now()
-
-	files, bytes, err := r.Verify(c.Args())
-	if err != nil {
+	if err := r.Verify(c.Args()); err != nil {
 		return cli.NewExitError(err, 1)
 	}
-
 	elapsed := time.Since(start)
 
-	logger.Println("files:", files, "bytes:", bytes, "time:", elapsed)
+	logger.Println("Verify finished in", elapsed)
 
 	games, err := datafile.GamesRemaining()
 	if err != nil {
@@ -225,8 +215,8 @@ func main() {
 	app.Commands = []cli.Command{
 		{
 			Name:        "export",
-			Usage:       "",
-			Description: "",
+			Usage:       "Create or update a target directory using the ROMs found in one or more source directories",
+			Description: "The XML dat file is read from the standard input and a partial XML dat file containing any missing ROM is written to standard output",
 			ArgsUsage:   "TARGET SOURCE...",
 			Flags: []cli.Flag{
 				cli.BoolFlag{
@@ -239,7 +229,7 @@ func main() {
 						Enum:    layouts,
 						Default: "simple",
 					},
-					Usage: strings.Join(layouts, ", "),
+					Usage: "organise the exported ROMs according to `LAYOUT`. (" + strings.Join(layouts, ", ") + ")",
 				},
 				cli.BoolFlag{
 					Name:  "verbose, v",
@@ -251,7 +241,7 @@ func main() {
 		{
 			Name:        "merge",
 			Usage:       "Merge multiple XML dat files together",
-			Description: "",
+			Description: "The merged XML file is written to standard output",
 			ArgsUsage:   "FILE...",
 			Flags: []cli.Flag{
 				cli.StringFlag{
@@ -276,10 +266,15 @@ func main() {
 		{
 			Name:        "verify",
 			Usage:       "Verify the contents of one or more directories against an XML dat file",
-			Description: "",
+			Description: "The XML dat file is read from the standard input and a partial XML dat file containing any missing ROM is written to standard output",
 			ArgsUsage:   "DIRECTORY...",
-			Flags:       []cli.Flag{},
-			Action:      verify,
+			Flags: []cli.Flag{
+				cli.BoolFlag{
+					Name:  "verbose, v",
+					Usage: "increase verbosity",
+				},
+			},
+			Action: verify,
 		},
 	}
 

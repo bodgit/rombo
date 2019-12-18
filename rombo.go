@@ -13,14 +13,22 @@ type Rombo struct {
 }
 
 func New(datafile *Datafile, logger *log.Logger, destructive bool, layout Layout) (*Rombo, error) {
+	if datafile == nil {
+		return nil, errors.New("need a database")
+	}
+	if logger == nil {
+		return nil, errors.New("need a logger")
+	}
+
+	l := layout
 	if layout == nil {
-		return nil, errors.New("need a layout")
+		l = SimpleCompressed{}
 	}
 
 	rombo := Rombo{
 		datafile:    datafile,
 		destructive: destructive,
-		layout:      layout,
+		layout:      l,
 		logger:      logger,
 	}
 	return &rombo, nil

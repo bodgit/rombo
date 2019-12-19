@@ -99,21 +99,18 @@ func (r *Rombo) mimeSplitter(ctx context.Context, in <-chan string) (<-chan stri
 		defer close(zip)
 		defer close(errc)
 		for file := range in {
-			_, extension, err := mimetype.DetectFile(file)
+			mime, err := mimetype.DetectFile(file)
 			if err != nil {
 				errc <- err
 				return
 			}
-			switch extension {
-			case "zip", "xlsx": // One zip so far has been misidentified as a .xlsx
+			switch mime.Extension() {
+			case ".zip":
 				select {
 				case zip <- file:
 				case <-ctx.Done():
 					return
 				}
-			case "7z": // Some archives have zip extension but are actually 7zip
-				// TODO
-				r.logger.Printf("Ignoring \"%s\" as we can't read it\n", file)
 			default:
 				select {
 				case out <- file:

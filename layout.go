@@ -137,7 +137,17 @@ func (MegaSD) ignorePath(relpath string) bool {
 type JaguarGD struct{}
 
 func (JaguarGD) exportPath(rom ROM) (string, bool, string, error) {
-	return rom.Filename, false, "", nil
+	parent, err := firstAlphanumeric(rom.Game)
+	if err != nil {
+		return "", false, "", err
+	}
+
+	switch filepath.Ext(rom.Filename) {
+	case ".j64":
+		return filepath.Join(parent, rom.Filename), false, "", nil
+	default:
+		return "", false, "", fmt.Errorf("unknown file extension: %s", rom.Filename)
+	}
 }
 
 func (JaguarGD) ignorePath(relpath string) bool {
@@ -157,7 +167,19 @@ func (JaguarGD) ignorePath(relpath string) bool {
 type SD2SNES struct{}
 
 func (SD2SNES) exportPath(rom ROM) (string, bool, string, error) {
-	return rom.Filename, false, "", nil
+	parent, err := firstAlphanumeric(rom.Game)
+	if err != nil {
+		return "", false, "", err
+	}
+
+	switch filepath.Ext(rom.Filename) {
+	case ".bs":
+		return filepath.Join("Satellaview", parent, rom.Filename), false, "", nil
+	case ".sfc":
+		return filepath.Join("Super Nintendo Entertainment System", parent, rom.Filename), false, "", nil
+	default:
+		return "", false, "", fmt.Errorf("unknown file extension: %s", rom.Filename)
+	}
 }
 
 func (SD2SNES) ignorePath(relpath string) bool {

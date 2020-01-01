@@ -2,6 +2,7 @@ package rombo
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -79,6 +80,8 @@ func (MegaSD) exportPath(rom ROM) (string, bool, string, error) {
 	}
 
 	switch filepath.Ext(rom.Filename) {
+	case ".sg":
+		return filepath.Join("SG-1000", parent, rom.Filename), false, "", nil
 	case ".sms":
 		return filepath.Join("Master System & Mark III", parent, rom.Filename), false, "", nil
 	case ".md":
@@ -106,7 +109,7 @@ func (MegaSD) exportPath(rom ROM) (string, bool, string, error) {
 
 		return filepath.Join("Mega-CD & Sega CD", parent, dir, rom.Filename), false, "", nil
 	default:
-		return filepath.Join(parent, rom.Filename), false, "", nil
+		return "", false, "", fmt.Errorf("unknown file extension: %s", rom.Filename)
 	}
 }
 

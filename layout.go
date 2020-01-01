@@ -189,3 +189,29 @@ func (SD2SNES) ignorePath(relpath string) bool {
 	}
 	return false
 }
+
+type Everdrive64 struct{}
+
+func (Everdrive64) exportPath(rom ROM) (string, bool, string, error) {
+	parent, err := firstAlphanumeric(rom.Game)
+	if err != nil {
+		return "", false, "", err
+	}
+
+	switch filepath.Ext(rom.Filename) {
+	case ".z64":
+		return filepath.Join("Nintendo 64", parent, rom.Filename), false, "", nil
+	case ".nes":
+		return filepath.Join("Nintendo Entertainment System", parent, rom.Filename), false, "", nil
+	default:
+		return "", false, "", fmt.Errorf("unknown file extension: %s", rom.Filename)
+	}
+}
+
+func (Everdrive64) ignorePath(relpath string) bool {
+	switch relpath {
+	case "ed64": // Ignore the system directory entirely
+		return true
+	}
+	return false
+}

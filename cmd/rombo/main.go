@@ -14,10 +14,11 @@ import (
 )
 
 var stringToLayout = map[string]rombo.Layout{
-	"simple":  rombo.SimpleCompressed{},
-	"jaguar":  rombo.JaguarGD{},
-	"megasd":  rombo.MegaSD{},
-	"sd2snes": rombo.SD2SNES{},
+	"simple":      rombo.SimpleCompressed{},
+	"jaguar":      rombo.JaguarGD{},
+	"megasd":      rombo.MegaSD{},
+	"sd2snes":     rombo.SD2SNES{},
+	"everdrive64": rombo.Everdrive64{},
 }
 
 type EnumValue struct {
